@@ -1,59 +1,84 @@
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    const path = url.pathname.replace(/^\/|\.m3u8$/gi, "").toLowerCase();
+import requests
+import os
 
-    // --- 处理 Python 脚本发来的更新请求 ---
-    if (request.method === "POST" && path === "update_key") {
-      try {
-        const data = await request.json();
-        // 这里可以扩展：将抓到的 key 存入 KV 数据库，实现真正全自动
-        console.log(`收到更新请求: 频道 ${data.id}, 新 Key ${data.key}`);
-        return new Response("OK", { status: 200 });
-      } catch (e) {
-        return new Response("Error", { status: 400 });
-      }
-    }
-
-    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-    // 1. 配置表
-    const config = {
-      "cdtv1": { name: "成都新闻", api: "https://www.cditv.cn/live/getLiveUrl?url=https%3A%2F%2Fcdn1.cditv.cn%2Fcdtv1high%2FCDTV1High.flv%2Fplaylist.m3u8", type: "cdtv" },
-      "lhtv01": { name: "龙华电影", key: "ztAK5EHzPGE", type: "ofiii" },
-      // ... 其他频道保持一致
-    };
-
-    // 首页导航逻辑 (略，保持你原有的 HTML)
-    if (path === "" || path === "index") { /* ... 原有逻辑 ... */ }
-
-    const ch = config[path];
-    if (!ch) return new Response("404", { status: 404 });
-
-    // 2. 龙华逻辑：Master 代理补全
-    if (ch.type === "ofiii") {
-      const finalUrl = `https://cdi.ofiii.com/ocean/video/playlist/${ch.key}/master.m3u8`;
-      return proxyM3u8(finalUrl, "https://www.ofiii.com/", UA);
-    }
-
-    // 3. 成都台逻辑 (略，保持你原有的逻辑)
-  }
-};
-
-async function proxyM3u8(targetUrl, referer, ua) {
-  const res = await fetch(targetUrl, { headers: { "Referer": referer, "User-Agent": ua } });
-  if (!res.ok) return new Response("Key Expired", { status: 403 });
-
-  let content = await res.text();
-  const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
-  
-  const fixedContent = content.split('\n').map(line => {
-    line = line.trim();
-    if (line && !line.startsWith('#') && !line.startsWith('http')) return baseUrl + line;
-    return line;
-  }).join('\n');
-  
-  return new Response(fixedContent, { 
-    headers: { "Content-Type": "application/vnd.apple.mpegurl", "Access-Control-Allow-Origin": "*" } 
-  });
+# 成都台发号器接口
+CHANNELS = {
+    "成都新闻综合": "https://www.cditv.cn/live/getLiveUrl?url=https://cdn1.cditv.cn/cdtv1high/CDTV1High.flv/playlist.m3u8",
+    "成都经济资讯": "https://www.cditv.cn/live/getLiveUrl?url=https://cdn1.cditv.cn/cdtv2high/CDTV2High.flv/playlist.m3u8",
+    "成都都市生活": "https://www.cditv.cn/live/getLiveUrl?url=https://cdn1.cditv.cn/cdtv3high/CDTV3High.flv/playlist.m3u8",
+    "成都影视文艺": "https://www.cditv.cn/live/getLiveUrl?url=https://cdn1.cditv.cn/cdtv4high/CDTV4High.flv/playlist.m3u8",
+    "成都公共": "https://www.cditv.cn/live/getLiveUrl?url=https://cdn1.cditv.cn/cdtv5high/CDTV5High.flv/playlist.m3u8",
+    "成都少儿": "https://www.cditv.cn/live/getLiveUrl?url=https://cdn1.cditv.cn/cdtv6high/CDTV6High.flv/playlist.m3u8",
+    "龙华电影": "https://cdi.ofiii.com/ocean/video/playlist/-2zcqx6V66M/litv-longturn03-avc1_2936000=4-mp4a_114000=2.m3u8",
 }
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.cditv.cn/"
+}
+
+def fetch_real_url(api_url):
+    """访问发号器接口，提取 data.url 中的真实 m3u8"""
+    try:
+        res = requests.get(api_url, headers=HEADERS, timeout=10)
+        data = res.json()
+
+        # 真实地址在 data.url
+        if "data" in data and isinstance(data["data"], dict):
+            real_url = data["data"].get("url")
+            if real_url and real_url.startswith("http"):
+                return real_url
+
+        return None
+
+    except Exception as e:
+        print("请求失败:", e)
+        return None
+
+
+def main():
+    m3u_file = "TWTV.m3u"
+
+    if not os.path.exists(m3u_file):
+        print("错误：找不到 TWTV.m3u 文件")
+        return
+
+    with open(m3u_file, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    new_lines = []
+    updated = 0
+    i = 0
+    total = len(lines)
+
+    while i < total:
+        line = lines[i]
+        new_lines.append(line)
+
+        for name, api_url in CHANNELS.items():
+            if f'tvg-name="{name}"' in line or line.strip().endswith(f",{name}"):
+
+                print(f"\n正在更新：{name}")
+                real_url = fetch_real_url(api_url)
+
+                if real_url:
+                    print(f"✅ 成功：{real_url}")
+                    new_lines.append(real_url + "\n")
+                    updated += 1
+                else:
+                    print("❌ 失败，保留旧地址")
+                    new_lines.append(lines[i+1])
+
+                i += 1
+                break
+
+        i += 1
+
+    with open(m3u_file, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+    print(f"\n✅ 更新完成，共更新 {updated} 个频道")
+
+
+if __name__ == "__main__":
+    main()
