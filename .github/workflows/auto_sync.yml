@@ -1,7 +1,7 @@
 name: IPTV Proxy Sync
 on:
   schedule:
-    - cron: '0 */2 * * *' # 每 2 小时全自动同步一次
+    - cron: '0 */4 * * *' # 每 4 小时全自动同步一次
   workflow_dispatch:      # 支持手动点击按钮同步
 
 jobs:
@@ -44,12 +44,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # 注意：安装包名是 selenium-wire，带横杠
-          pip install requests selenium-wire chromedriver-autoinstaller selenium
+          # 锁定版本以解决 blinker 导致的 selenium-wire 崩溃问题
+          python -m pip install --upgrade pip
+          pip install blinker==1.7.0
+          pip install requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
       - name: Execute Sync Script
         env:
-          # 让 Python 所有的请求都强制走本地代理
           HTTP_PROXY: "http://127.0.0.1:7890"
           HTTPS_PROXY: "http://127.0.0.1:7890"
         run: python cloud_sync.py
