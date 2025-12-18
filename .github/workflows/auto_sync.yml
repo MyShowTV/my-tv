@@ -1,93 +1,63 @@
 name: IPTV Proxy Sync
-
 on:
   schedule:
-    - cron: "0 */4 * * *"   # 每 4 小时自动运行
-  workflow_dispatch:         # 可手动触发
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 🧩 Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v3
 
-      - name: ⚙️ Setup Mihomo (Auto Port Selection)
+      - name: Setup Mihomo
         run: |
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
-          echo "🔧 创建基础配置..."
+          # 尝试更换为 17003 (台湾 03) 节点，有时后面的端口更不容易被防火墙拦截
           cat <<EOF > config.yaml
-mixed-port: 7890
-allow-lan: true
-mode: global
-log-level: info
-proxies:
-  - name: "TW-AUTO"
-    type: ss
-    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: 17001
-    cipher: aes-256-gcm
-    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
-    udp: false
-EOF
+          mixed-port: 7890
+          allow-lan: true
+          mode: global
+          log-level: info
+          proxies:
+            - name: "TW-NODE"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17003
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: true
+          EOF
 
-          # 自动检测通的端口
-          for p in $(seq 17001 17010); do
-            echo "🔁 尝试端口: $p"
-            sed -i "s/port: .*/port: $p/" config.yaml
-
-            nohup ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-            sleep 20
-
-            IP=$(curl -s -x http://127.0.0.1:7890 https://ifconfig.me || echo "FAILED")
-            echo "🌐 隧道出口 IP: $IP"
-
-            if [[ "$IP" != "FAILED" && "$IP" != "52."* && "$IP" != "20."* ]]; then
-              echo "✅ 代理连接成功: $IP (端口 $p)"
-              break
-            else
-              echo "❌ 端口 $p 不通，切换下一个..."
-              pkill -f mihomo || true
-              sleep 3
-            fi
-          done
-
-          FINAL_IP=$(curl -s -x http://127.0.0.1:7890 https://ifconfig.me || echo "FAILED")
-          if [[ "$FINAL_IP" == "FAILED" || "$FINAL_IP" == 52.* || "$FINAL_IP" == 20.* ]]; then
-            echo "❌ 所有端口均失败，代理未生效"
-            tail -n 20 mihomo.log || true
+          ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
+          
+          echo "等待节点握手..."
+          sleep 40
+          
+          echo "--- 连通性深度测试 ---"
+          # 只有这个测试通过（显示台湾IP），Python 脚本才有意义
+          PROXY_IP=$(curl -x http://127.0.0.1:7890 -s -L https://ifconfig.me || echo "FAILED")
+          echo "隧道实际 IP: $PROXY_IP"
+          
+          if [[ "$PROXY_IP" == "FAILED" ]] || [[ "$PROXY_IP" == 20.* ]] || [[ "$PROXY_IP" == 52.* ]]; then
+            echo "❌ 代理未生效（依然是机房IP或连接失败），请尝试更换 17001-17010 之间的其他端口"
+            tail -n 20 mihomo.log
             exit 1
           fi
 
-          echo "✅ 最终代理出口 IP: $FINAL_IP"
-          echo "--- Mihomo 代理日志摘要 ---"
-          tail -n 10 mihomo.log || true
-
-      - name: 🐍 Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.9"
+          python-version: '3.9'
 
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
-      - name: 🚀 Execute Sync Script
-        run: |
-          echo "--- 验证代理连通性 ---"
-          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "❌ 代理连接失败"
-          echo "--- 执行 cloud_sync.py ---"
-          python cloud_sync.py
-
-      - name: 🧾 Show Logs
-        if: always()
-        run: |
-          echo "=== Mihomo 日志 ==="
-          tail -n 30 mihomo.log || true
-          echo ""
-          echo "=== Python 输出日志 ==="
-          tail -n 50 nohup.out || true
+      - name: Execute Sync
+        run: python cloud_sync.py
