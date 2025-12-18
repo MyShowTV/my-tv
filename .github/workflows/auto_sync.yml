@@ -2,30 +2,28 @@ name: IPTV Proxy Sync
 
 on:
   schedule:
-    - cron: "0 */4 * * *"   # 每 4 小时运行一次
-  workflow_dispatch:          # 支持手动点击运行
+    - cron: "0 */2 * * *"   # 每 2 小时执行一次
+  workflow_dispatch:          # 必须保留，用于手动点击运行按钮
 
 jobs:
-  build:
+  sync_job:
     runs-on: ubuntu-latest
     steps:
-      - name: 🧩 Checkout Repository
+      - name: 🧩 检出代码
         uses: actions/checkout@v3
 
-      - name: ⚙️ Setup Mihomo & Find Taiwan IP
+      - name: ⚙️ 安装代理引擎并寻找台湾节点
         run: |
-          # 下载并解压 Mihomo (Clash Meta)
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
           SUCCESS=false
-          # 循环探测端口 17001 到 17015
+          # 轮询探测端口 17001 到 17015
           for p in $(seq 17001 17015); do
             echo "-----------------------------------"
-            echo "🔁 正在测试端口: $p"
+            echo "🔁 尝试端口: $p"
             
-            # 动态生成带分流规则的配置
             cat <<EOF > config.yaml
 mixed-port: 7890
 allow-lan: true
@@ -50,49 +48,45 @@ rules:
   - MATCH,DIRECT
 EOF
 
-            # 启动代理
             ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
             sleep 25
 
-            # 验证归属地 (必须是 TW)
+            # 归属地校验 (必须是 TW)
             CHECK=$(curl -s --max-time 15 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAILED"}')
-            COUNTRY=$(echo $CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
+            COUNTRY=$(echo $CHECK | sudo apt-get install -y jq > /dev/null && echo $CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
             IP=$(echo $CHECK | jq -r '.query' 2>/dev/null || echo "UNKNOWN")
             
-            echo "🌐 当前出口 IP: $IP | 归属地: $COUNTRY"
+            echo "🌐 出口 IP: $IP | 归属地: $COUNTRY"
 
             if [[ "$COUNTRY" == "TW" ]]; then
               echo "✅ 锁定台湾节点成功！使用端口: $p"
               SUCCESS=true
               break
             else
-              echo "❌ 地区不匹配，杀掉进程并尝试下一个..."
+              echo "❌ 非台湾节点，尝试下一个..."
               pkill -f mihomo || true
               sleep 2
             fi
           done
 
           if [ "$SUCCESS" = false ]; then
-            echo "❌ 错误：所有尝试的端口均非台湾 IP，请检查机场节点状态。"
+            echo "❌ 失败：未能在可用端口中找到台湾 IP。"
             exit 1
           fi
 
-      - name: 🐍 Setup Python
+      - name: 🐍 配置 Python 环境
         uses: actions/setup-python@v4
         with:
           python-version: "3.9"
 
-      - name: 📦 Install dependencies
+      - name: 📦 安装抓取依赖
         run: |
-          sudo apt-get install -y jq
           python -m pip install --upgrade pip
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
-      - name: 🚀 Execute Sync Script
+      - name: 🚀 执行同步脚本
         run: python cloud_sync.py
 
-      - name: 🧾 Show Final Logs
+      - name: 🧾 打印日志摘要
         if: always()
-        run: |
-          echo "=== 代理日志最后 20 行 ==="
-          tail -n 20 mihomo.log || true
+        run: tail -n 20 mihomo.log || true
