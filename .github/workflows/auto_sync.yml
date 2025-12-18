@@ -2,86 +2,266 @@ name: IPTV Proxy Sync
 
 on:
   schedule:
-    - cron: "0 */4 * * *"
-  workflow_dispatch:
+    - cron: "0 */4 * * *"  # 每4小时运行一次
+  workflow_dispatch:        # 支持手动触发
+  push:
+    branches: [ main ]
+    paths: 
+      - 'clash_config.yaml'  # 配置文件变更时也运行
+
+env:
+  PYTHON_VERSION: "3.9"
+  CLASH_VERSION: "v1.18.0"
+  REQUIREMENTS: |
+    blinker==1.7.0
+    requests==2.31.0
+    selenium-wire==5.1.0
+    selenium==4.9.1
+    beautifulsoup4==4.12.2
+    lxml==4.9.3
 
 jobs:
-  build:
+  sync-iptv:
     runs-on: ubuntu-latest
+    
     steps:
       - name: 🧩 Checkout Repository
         uses: actions/checkout@v3
 
-      - name: ⚙️ Setup Mihomo & Detect Taiwan IP
-        run: |
-          wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
-          gunzip mihomo-linux-amd64-v1.18.9.gz
-          chmod +x mihomo-linux-amd64-v1.18.9
-
-          SUCCESS=false
-          # 轮询 17001 到 17010 端口
-          for p in $(seq 17001 17010); do
-            echo "-----------------------------------"
-            echo "🔁 正在尝试端口: $p"
-            
-            cat <<EOF > config.yaml
-          mixed-port: 7890
-          allow-lan: true
-          mode: global
-          log-level: info
-          proxies:
-            - name: "TW-NODE"
-              type: ss
-              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-              port: $p
-              cipher: aes-256-gcm
-              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
-              udp: false
-          EOF
-
-            ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-            sleep 25
-
-            # 使用 ip-api.com 检测归属地，增加 --max-time 防止卡死
-            CHECK=$(curl -s --max-time 15 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAILED"}')
-            COUNTRY=$(echo $CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
-            IP=$(echo $CHECK | jq -r '.query' 2>/dev/null || echo "UNKNOWN")
-            
-            echo "🌐 出口 IP: $IP | 归属地: $COUNTRY"
-
-            if [[ "$COUNTRY" == "TW" ]]; then
-              echo "✅ 成功锁定台湾节点 (端口 $p)，准备执行同步..."
-              SUCCESS=true
-              break
-            else
-              echo "❌ 端口 $p 归属地不是台湾 (实际为: $COUNTRY)，切换下一个..."
-              pkill -f mihomo || true
-              sleep 2
-            fi
-          done
-
-          if [ "$SUCCESS" = false ]; then
-            echo "❌ 轮询结束，未能找到可用的台湾 IP 节点。"
-            exit 1
-          fi
-
       - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.9"
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: 📦 Install dependencies
+      - name: 📦 Install System Dependencies
         run: |
-          sudo apt-get install -y jq
+          sudo apt-get update
+          sudo apt-get install -y jq wget curl unzip
+          # 安装 Chrome 和 Chromedriver
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: 📦 Install Python Dependencies
+        run: |
           python -m pip install --upgrade pip
-          pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
+          pip install ${{ env.REQUIREMENTS }}
+          pip install chromedriver-autoinstaller
 
-      - name: 🚀 Execute Sync Script
-        run: python cloud_sync.py
+      - name: 🚀 Start Clash Proxy
+        run: |
+          # 下载 Clash
+          echo "下载 Clash 核心..."
+          wget -q "https://github.com/Dreamacro/clash/releases/download/${CLASH_VERSION}/clash-linux-amd64-${CLASH_VERSION}.gz"
+          gunzip "clash-linux-amd64-${CLASH_VERSION}.gz"
+          mv "clash-linux-amd64-${CLASH_VERSION}" clash
+          chmod +x clash
+          
+          # 创建精简版配置文件（只保留台湾节点）
+          echo "创建精简配置文件..."
+          cat > clash_config_simple.yaml <<'EOF'
+          mixed-port: 7890
+          allow-lan: false
+          mode: global
+          log-level: info
+          
+          proxies:
+            - name: "🇨🇳 Taiwan丨01"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17001
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+            
+            - name: "🇨🇳 Taiwan丨02"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17002
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+            
+            - name: "🇨🇳 Taiwan丨03"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17003
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+            
+            - name: "🇨🇳 Taiwan丨04"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17004
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+            
+            - name: "🇨🇳 Taiwan丨05"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17005
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+            
+            - name: "🇨🇳 Taiwan丨06"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17006
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+            
+            - name: "🇨🇳 Taiwan丨07"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17007
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+            
+            - name: "🇨🇳 Taiwan丨08"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17008
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+            
+            - name: "🇨🇳 Taiwan丨09"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17009
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+            
+            - name: "🇨🇳 Taiwan丨10"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17010
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+          
+          proxy-groups:
+            - name: "台湾节点组"
+              type: select
+              proxies:
+                - "🇨🇳 Taiwan丨01"
+                - "🇨🇳 Taiwan丨02"
+                - "🇨🇳 Taiwan丨03"
+                - "🇨🇳 Taiwan丨04"
+                - "🇨🇳 Taiwan丨05"
+                - "🇨🇳 Taiwan丨06"
+                - "🇨🇳 Taiwan丨07"
+                - "🇨🇳 Taiwan丨08"
+                - "🇨🇳 Taiwan丨09"
+                - "🇨🇳 Taiwan丨10"
+          
+          rules:
+            - MATCH,台湾节点组
+          EOF
+          
+          # 启动 Clash
+          echo "启动 Clash..."
+          ./clash -f clash_config_simple.yaml > clash.log 2>&1 &
+          CLASH_PID=$!
+          
+          # 等待启动
+          sleep 15
+          
+          # 测试代理是否正常工作
+          echo "测试代理连接..."
+          for i in {1..5}; do
+            RESPONSE=$(curl -s --max-time 10 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"status":"fail"}')
+            STATUS=$(echo $RESPONSE | jq -r '.status' 2>/dev/null || echo "error")
+            
+            if [[ "$STATUS" == "success" ]]; then
+              COUNTRY=$(echo $RESPONSE | jq -r '.countryCode')
+              IP=$(echo $RESPONSE | jq -r '.query')
+              echo "✅ 代理连接成功 | IP: $IP | 国家: $COUNTRY"
+              
+              if [[ "$COUNTRY" == "TW" ]]; then
+                echo "🎯 成功连接到台湾节点"
+                echo "台湾节点已就绪，开始同步任务..."
+                exit 0
+              else
+                echo "⚠️ 代理节点不是台湾 (实际: $COUNTRY)，继续测试..."
+              fi
+            fi
+            sleep 2
+          done
+          
+          echo "❌ 无法连接到台湾节点"
+          kill $CLASH_PID 2>/dev/null || true
+          exit 1
 
-      - name: 🧾 Show Logs
+      - name: 🔄 Execute Sync Script with Proxy
+        run: |
+          echo "设置代理环境变量..."
+          export http_proxy="http://127.0.0.1:7890"
+          export https_proxy="http://127.0.0.1:7890"
+          export HTTP_PROXY="http://127.0.0.1:7890"
+          export HTTPS_PROXY="http://127.0.0.1:7890"
+          
+          echo "验证代理设置..."
+          curl -s --max-time 10 http://ip-api.com/json/ | jq '.countryCode + " - " + .query'
+          
+          echo "开始执行同步脚本..."
+          python cloud_sync.py 2>&1 | tee sync.log
+          
+          if [[ $? -eq 0 ]]; then
+            echo "✅ 同步脚本执行成功"
+          else
+            echo "❌ 同步脚本执行失败"
+            exit 1
+          fi
+
+      - name: 📝 Update Config Files
+        if: success()
+        run: |
+          echo "检查配置文件更新..."
+          
+          # 这里可以根据需要更新配置文件
+          # 例如，如果抓取到了新的 AssetID，可以自动更新
+          if [[ -f "new_config.json" ]]; then
+            echo "检测到新的配置，正在更新..."
+            # 处理新配置的逻辑
+            python update_configs.py
+          fi
+          
+          # 检查是否有文件变更
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          if [[ -n $(git status --porcelain) ]]; then
+            git add .
+            git commit -m "🔄 自动更新播放源 [$(date +'%Y-%m-%d %H:%M:%S')]"
+            git push
+            echo "📤 已提交更新到仓库"
+          else
+            echo "📭 没有需要更新的内容"
+          fi
+
+      - name: 🧹 Cleanup
         if: always()
         run: |
-          echo "=== Python 运行日志摘要 ==="
-          # 如果 Python 脚本报错，这里能看到最后的输出
-          tail -n 50 mihomo.log || true
+          echo "清理进程..."
+          pkill -f clash 2>/dev/null || true
+          pkill -f chrome 2>/dev/null || true
+          
+          echo "工作流执行完成"
+
+      - name: 📊 Upload Logs
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: sync-logs
+          path: |
+            clash.log
+            sync.log
+          retention-days: 7
