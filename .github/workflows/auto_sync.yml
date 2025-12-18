@@ -1,117 +1,87 @@
-name: IPTV Proxy Sync Optimized
+name: IPTV Proxy Sync
 
 on:
   schedule:
     - cron: "0 */4 * * *"
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
-  proxy_sync:
+  build:
     runs-on: ubuntu-latest
-    env:
-      DEFAULT_PORT: 17001
-      MAX_RETRIES: 3
-      TIMEOUT_SEC: 15
     steps:
       - name: 🧩 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: ⚙️ Setup Environment
+      - name: ⚙️ Setup Mihomo & Detect Taiwan IP
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl wget
-          wget -q https://github.com/MetaCubeX/mihomo/releases/download/v1.19.3/mihomo-linux-amd64-v1.19.3.gz
-          gunzip mihomo-linux-amd64-v1.19.3.gz
-          chmod +x mihomo-linux-amd64-v1.19.3
+          wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
+          gunzip mihomo-linux-amd64-v1.18.9.gz
+          chmod +x mihomo-linux-amd64-v1.18.9
 
-      - name: 🌐 Parallel Port Testing
-        id: port_test
-        run: |
-          PORTS=$(seq 17001 17015)
-          VALID_PORTS=()
-          LOG_DIR="./test_logs"
-          mkdir -p $LOG_DIR
+          SUCCESS=false
+          # 轮询 17001 到 17010 端口
+          for p in $(seq 17001 17010); do
+            echo "-----------------------------------"
+            echo "🔁 正在尝试端口: $p"
+            
+            cat <<EOF > config.yaml
+          mixed-port: 7890
+          allow-lan: true
+          mode: global
+          log-level: info
+          proxies:
+            - name: "TW-NODE"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: $p
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: false
+          EOF
 
-          test_port() {
-            local port=$1
-            local log="$LOG_DIR/mihomo_$port.log"
-            local config="config_$port.yaml"
+            ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
+            sleep 25
 
-            cat <<EOF > $config
-mixed-port: 7890
-allow-lan: true
-mode: rule
-log-level: warning
-proxies:
-  - name: "TW-NODE-$port"
-    type: ss
-    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: $port
-    cipher: aes-256-gcm
-    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
-rules:
-  - DOMAIN-SUFFIX,ofiii.com,TW-NODE-$port
-  - DOMAIN,ip-api.com,TW-NODE-$port
-  - MATCH,DIRECT
-EOF
+            # 使用 ip-api.com 检测归属地，增加 --max-time 防止卡死
+            CHECK=$(curl -s --max-time 15 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAILED"}')
+            COUNTRY=$(echo $CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
+            IP=$(echo $CHECK | jq -r '.query' 2>/dev/null || echo "UNKNOWN")
+            
+            echo "🌐 出口 IP: $IP | 归属地: $COUNTRY"
 
-            ./mihomo-linux-amd64-v1.19.3 -f $config > $log 2>&1 &
-            sleep 10
+            if [[ "$COUNTRY" == "TW" ]]; then
+              echo "✅ 成功锁定台湾节点 (端口 $p)，准备执行同步..."
+              SUCCESS=true
+              break
+            else
+              echo "❌ 端口 $p 归属地不是台湾 (实际为: $COUNTRY)，切换下一个..."
+              pkill -f mihomo || true
+              sleep 2
+            fi
+          done
 
-            for attempt in $(seq 1 $MAX_RETRIES); do
-              CHECK=$(curl -s --max-time $TIMEOUT_SEC -x http://127.0.0.1:7890 https://ipinfo.io/country?token=${{ secrets.IPINFO_TOKEN }} || echo 'FAIL')
-              if [[ "$CHECK" == "TW" ]]; then
-                echo "✅ 端口 $port 验证成功 (尝试 $attempt/$MAX_RETRIES)"
-                VALID_PORTS+=($port)
-                pkill -f mihomo
-                return 0
-              fi
-              sleep 5
-            done
-
-            pkill -f mihomo
-            echo "❌ 端口 $port 验证失败" >> $log
-            return 1
-          }
-
-          export -f test_port
-          echo "$PORTS" | xargs -n1 -I{} -P 8 bash -c 'test_port "$@"' _ {}
-
-          if [ ${#VALID_PORTS[@]} -gt 0 ]; then
-            SELECTED_PORT=${VALID_PORTS[0]}
-            echo "SELECTED_PORT=$SELECTED_PORT" >> $GITHUB_ENV
-          else
-            SELECTED_PORT=$DEFAULT_PORT
-            echo "SELECTED_PORT=$SELECTED_PORT" >> $GITHUB_ENV
+          if [ "$SUCCESS" = false ]; then
+            echo "❌ 轮询结束，未能找到可用的台湾 IP 节点。"
+            exit 1
           fi
 
-      - name: 🚀 Final Service Startup
-        run: |
-          cat <<EOF > final_config.yaml
-mixed-port: 7890
-allow-lan: true
-mode: rule
-log-level: info
-proxies:
-  - name: "TW-FINAL"
-    type: ss
-    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: ${{ env.SELECTED_PORT }}
-    cipher: aes-256-gcm
-    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
-rules:
-  - DOMAIN-SUFFIX,ofiii.com,TW-FINAL
-  - DOMAIN,ipinfo.io,TW-FINAL
-  - MATCH,DIRECT
-EOF
-
-          ./mihomo-linux-amd64-v1.19.3 -f final_config.yaml
-
-      - name: 📅 Log Artifacts
-        uses: actions/upload-artifact@v4
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
         with:
-          name: test-logs
-          path: ./test_logs/
+          python-version: "3.9"
+
+      - name: 📦 Install dependencies
+        run: |
+          sudo apt-get install -y jq
+          python -m pip install --upgrade pip
+          pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
+
+      - name: 🚀 Execute Sync Script
+        run: python cloud_sync.py
+
+      - name: 🧾 Show Logs
+        if: always()
+        run: |
+          echo "=== Python 运行日志摘要 ==="
+          # 如果 Python 脚本报错，这里能看到最后的输出
+          tail -n 50 mihomo.log || true
