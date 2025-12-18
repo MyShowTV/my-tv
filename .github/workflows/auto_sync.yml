@@ -2,7 +2,7 @@ name: IPTV Proxy Sync
 
 on:
   schedule:
-    - cron: "0 */2 * * *" # 每 2 小时自动执行一次
+    - cron: "0 */4 * * *" # 每 4 小时自动执行一次
   workflow_dispatch:
 
 jobs:
