@@ -7,65 +7,65 @@ from selenium.webdriver.chrome.options import Options
 
 WORKER_URL = "https://cdtv-proxy.leixinghuazj.workers.dev/update_key"
 AUTH_PW = "your_password_666" 
-
 CHANNELS = ["litv-longturn03", "litv-longturn21", "litv-longturn18", "litv-longturn11", "litv-longturn12", "litv-longturn01", "litv-longturn02"]
 
 def get_driver():
-    # 彻底隔离驱动下载，防止干扰
-    old_proxy = os.environ.get('HTTP_PROXY')
-    if 'HTTP_PROXY' in os.environ: del os.environ['HTTP_PROXY']
-    if 'HTTPS_PROXY' in os.environ: del os.environ['HTTPS_PROXY']
+    # 1. 环境清理，确保下载驱动直连
+    for env_var in ['HTTP_PROXY', 'HTTPS_PROXY']:
+        os.environ.pop(env_var, None)
     
     chromedriver_autoinstaller.install()
     
-    # 重新设置代理
-    os.environ['HTTP_PROXY'] = "http://127.0.0.1:7890"
-    os.environ['HTTPS_PROXY'] = "http://127.0.0.1:7890"
-
+    # 2. 重新锁定代理地址
+    proxy_addr = "127.0.0.1:7890"
+    
     sw_options = {
         'proxy': {
-            'http': 'http://127.0.0.1:7890',
-            'https': 'http://127.0.0.1:7890',
+            'http': f'http://{proxy_addr}',
+            'https': f'http://{proxy_addr}',
             'no_proxy': 'localhost,127.0.0.1'
-        },
-        'auto_config': False, # 强制手动配置代理
-        'request_storage': 'memory'
+        }
     }
     
     options = Options()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
+    # 核心：强制 Chrome 进程级别使用代理
+    options.add_argument(f'--proxy-server=http://{proxy_addr}')
+    options.add_argument('--ignore-certificate-errors')
     options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
     return webdriver.Chrome(options=options, seleniumwire_options=sw_options)
 
 def sync():
+    print("🚀 启动深度抓取流程...")
     driver = get_driver()
-    # 强制测试驱动内部的 IP
+    
+    # 再次确认浏览器内的 IP
     try:
         driver.get("https://ifconfig.me/ip")
-        print(f"🕵️ 浏览器实际出口 IP: {driver.page_source.strip()}")
+        print(f"🕵️ 浏览器内核出口 IP: {driver.page_source.strip()}")
     except: pass
 
     for cid in CHANNELS:
         try:
-            print(f"📡 抓取频道: {cid}")
+            print(f"📡 正在嗅探频道: {cid}")
             driver.get(f"https://www.ofiii.com/channel/watch/{cid}")
             
-            # 增加等待时间，Ofiii 节点较慢
+            # 等待视频流加载
             time.sleep(30) 
             
             asset_id = None
-            # 扩大搜索范围：只要包含 playlist 且在 ofiii 的请求中
+            # 强化匹配规则
             for req in driver.requests:
-                url = req.url
-                if 'playlist' in url and (cid in url or 'litv' in url):
-                    # 尝试多种分割方式获取 ID
+                u = req.url
+                if 'playlist' in u and (cid in u or 'litv' in u):
                     try:
-                        parts = url.split('/')
-                        asset_id = parts[parts.index('playlist') + 1]
+                        # 典型的 URL 结构: .../playlist/ASSET_ID/index.m3u8
+                        parts = u.split('/')
+                        idx = parts.index('playlist')
+                        asset_id = parts[idx + 1]
                         break
                     except: continue
             
@@ -73,9 +73,9 @@ def sync():
                 res = requests.post(WORKER_URL, json={"id": cid, "key": asset_id, "pw": AUTH_PW}, timeout=10)
                 print(f"✅ {cid} 同步成功: {asset_id}")
             else:
-                print(f"❌ {cid} 失败 (未捕获到 playlist 请求)")
+                print(f"❌ {cid} 抓取失败 (未发现数据包)")
             
-            del driver.requests
+            del driver.requests # 清理内存防止 GitHub 报错
         except Exception as e:
             print(f"💥 {cid} 异常: {e}")
     
