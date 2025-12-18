@@ -11,14 +11,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Setup Mihomo
+      - name: Setup Mihomo (Taiwan Proxy)
         run: |
-          # 1. 下载 Mihomo
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
-          # 2. 生成最简、合法的配置文件 (直接填入你的台湾节点信息)
+          # 生成纯净配置：使用台湾 05 节点 (17005) 尝试绕过拥堵
           cat <<EOF > config.yaml
           mixed-port: 7890
           allow-lan: true
@@ -28,26 +27,20 @@ jobs:
             - name: "TW-NODE"
               type: ss
               server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-              port: 17001
+              port: 17005
               cipher: aes-256-gcm
               password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
               udp: true
           EOF
 
-          # 3. 启动
           ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-
-          echo "等待代理就绪..."
-          for i in {1..10}; do
-            if nc -z localhost 7890; then
-              echo "✅ 代理已启动！"
-              break
-            fi
-            sleep 2
-          done
-
-          echo "--- 测试台湾出口 IP ---"
-          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || true
+          
+          echo "正在建立隧道..."
+          sleep 20
+          
+          echo "--- 核心验证：隧道出口 IP ---"
+          # 如果这里出来的 IP 还是美国，说明 17005 端口失效，请手动改为 17002 或 17003
+          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "代理连接失败"
 
       - name: Set up Python
         uses: actions/setup-python@v4
