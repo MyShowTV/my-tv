@@ -12,121 +12,40 @@ jobs:
       - name: 🧩 Checkout Repository
         uses: actions/checkout@v3
 
-      - name: ⚙️ Setup Mihomo & Detect Taiwan IP
+      - name: ⚙️ Install Dependencies
         run: |
-          # 安装必要工具
-          sudo apt-get update && sudo apt-get install -y jq netcat-traditional psmisc
-          
-          # 下载并配置Mihomo
-          wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
-          if [ $? -ne 0 ]; then
-            echo "❌ Mihomo下载失败"
-            exit 1
-          fi
-          gunzip mihomo-linux-amd64-v1.18.9.gz
-          chmod +x mihomo-linux-amd64-v1.18.9
-          
-          SUCCESS=false
-          VALID_PORT=""
-          # 清理残留进程
-          pkill -f mihomo-linux-amd64-v1.18.9 || true
-          sleep 2
-
-          # 轮询 17001 到 17010 端口（可扩展到17015）
-          for p in $(seq 17001 17010); do
-            echo "-----------------------------------"
-            echo "🔁 正在尝试端口: $p"
-            
-            # 优化Mihomo配置：强制所有流量走TW-NODE
-            cat <<EOF > config.yaml
-mixed-port: 7890
-allow-lan: true
-mode: rule
-log-level: info
-proxies:
-  - name: "TW-NODE"
-    type: ss
-    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: $p
-    cipher: aes-256-gcm
-    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
-    udp: false
-  - name: "DIRECT"
-    type: direct
-proxy-groups:
-  - name: "DEFAULT"
-    type: select
-    proxies:
-      - "TW-NODE"
-      - "DIRECT"
-rules:
-  - MATCH,DEFAULT
-EOF
-
-            # 启动Mihomo，后台运行
-            ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo_$p.log 2>&1 &
-            MIHO_PID=$!
-            echo "📌 Mihomo进程ID: $MIHO_PID"
-
-            # 延长等待时间到35秒，确保代理完全就绪
-            sleep 35
-
-            # 先检测代理端口是否监听
-            if ! nc -z 127.0.0.1 7890; then
-              echo "❌ 代理端口7890未启动，跳过端口$p"
-              kill $MIHO_PID || true
-              wait $MIHO_PID 2>/dev/null
-              sleep 2
-              continue
-            fi
-
-            # 多次检测IP，避免单次波动（检测3次，间隔2秒）
-            COUNTRY=""
-            for i in 1 2 3; do
-              CHECK=$(curl -s --max-time 20 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAILED"}')
-              COUNTRY=$(echo $CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
-              IP=$(echo $CHECK | jq -r '.query' 2>/dev/null || echo "UNKNOWN")
-              echo "🔍 第$i次检测 - 出口 IP: $IP | 归属地: $COUNTRY"
-              if [[ "$COUNTRY" == "TW" ]]; then
-                break
-              fi
-              sleep 2
-            done
-            
-            echo "🌐 最终检测 - 出口 IP: $IP | 归属地: $COUNTRY"
-
-            if [[ "$COUNTRY" == "TW" ]]; then
-              echo "✅ 成功锁定台湾节点 (端口 $p)，准备执行同步..."
-              SUCCESS=true
-              VALID_PORT=$p
-              break
-            else
-              echo "❌ 端口 $p 归属地不是台湾 (实际为: $COUNTRY)，切换下一个..."
-              kill $MIHO_PID || true
-              wait $MIHO_PID 2>/dev/null
-              sleep 2
-              # 清理日志
-              rm -f mihomo_$p.log
-            fi
-          done
-
-          if [ "$SUCCESS" = false ]; then
-            echo "❌ 轮询结束，未能找到可用的台湾 IP 节点。"
-            # 可选：如果不需要严格的台湾节点，可注释exit 1，继续执行同步（根据需求调整）
-            # exit 1
-            echo "⚠️  未找到台湾节点，尝试直接执行同步..."
-            SUCCESS=true # 临时跳过节点检测，仅用于测试同步脚本
-          fi
-
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.9"
-
-      - name: 📦 Install dependencies
-        run: |
+          # 安装系统依赖（Chrome浏览器，解决selenium驱动问题）
+          sudo apt-get update
+          sudo apt-get install -y jq wget curl unzip chromium-browser
+          # 安装Python依赖
           python -m pip install --upgrade pip
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
+
+      # 可选：启动Mihomo代理（若有有效代理节点则开启，否则注释此步骤）
+      # - name: ⚙️ Start Mihomo Proxy
+      #   run: |
+      #     wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
+      #     gunzip mihomo-linux-amd64-v1.18.9.gz
+      #     chmod +x mihomo-linux-amd64-v1.18.9
+      #     # 替换为有效代理配置（示例为SS，需改成自己的）
+      #     cat <<EOF > config.yaml
+      # mixed-port: 7890
+      # allow-lan: true
+      # mode: global
+      # log-level: info
+      # proxies:
+      #   - name: "TW-NODE"
+      #     type: ss
+      #     server: your-valid-tw-server.com
+      #     port: your-port
+      #     cipher: aes-256-gcm
+      #     password: your-password
+      #     udp: false
+      # EOF
+      #     ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
+      #     sleep 30
+      #     # 检测代理是否生效
+      #     curl -s --max-time 15 -x http://127.0.0.1:7890 http://ip-api.com/json/
 
       - name: 🚀 Execute Sync Script
         run: python cloud_sync.py
@@ -134,10 +53,9 @@ EOF
       - name: 🧾 Show Logs
         if: always()
         run: |
-          if [ -n "$VALID_PORT" ]; then
-            tail -n 50 mihomo_$VALID_PORT.log || true
-          else
+          # 显示Mihomo日志（若启动了代理）
+          if [ -f mihomo.log ]; then
             tail -n 50 mihomo.log || true
           fi
-          # 清理残留进程
+          # 清理进程
           pkill -f mihomo-linux-amd64-v1.18.9 || true
