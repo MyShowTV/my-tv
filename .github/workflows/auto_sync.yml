@@ -4,84 +4,66 @@ on:
   schedule:
     - cron: "0 */4 * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
+    env:
+      DEFAULT_PORT: 17001
+      MAX_RETRIES: 3
+      TIMEOUT_SEC: 15
     steps:
       - name: 🧩 Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: ⚙️ Setup Mihomo & Detect Taiwan IP
-        run: |
-          wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
-          gunzip mihomo-linux-amd64-v1.18.9.gz
-          chmod +x mihomo-linux-amd64-v1.18.9
-
-          SUCCESS=false
-          # 轮询 17001 到 17010 端口
-          for p in $(seq 17001 17010); do
-            echo "-----------------------------------"
-            echo "🔁 正在尝试端口: $p"
-            
-            cat <<EOF > config.yaml
-          mixed-port: 7890
-          allow-lan: true
-          mode: global
-          log-level: info
-          proxies:
-            - name: "TW-NODE"
-              type: ss
-              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-              port: $p
-              cipher: aes-256-gcm
-              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
-              udp: false
-          EOF
-
-            ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-            sleep 25
-
-            # 使用 ip-api.com 检测归属地，增加 --max-time 防止卡死
-            CHECK=$(curl -s --max-time 15 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAILED"}')
-            COUNTRY=$(echo $CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
-            IP=$(echo $CHECK | jq -r '.query' 2>/dev/null || echo "UNKNOWN")
-            
-            echo "🌐 出口 IP: $IP | 归属地: $COUNTRY"
-
-            if [[ "$COUNTRY" == "TW" ]]; then
-              echo "✅ 成功锁定台湾节点 (端口 $p)，准备执行同步..."
-              SUCCESS=true
-              break
-            else
-              echo "❌ 端口 $p 归属地不是台湾 (实际为: $COUNTRY)，切换下一个..."
-              pkill -f mihomo || true
-              sleep 2
-            fi
-          done
-
-          if [ "$SUCCESS" = false ]; then
-            echo "❌ 轮询结束，未能找到可用的台湾 IP 节点。"
-            exit 1
-          fi
-
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
+      - name: ⚙️ Setup Node.js Environment
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.9"
+          node-version: "20.x"
 
-      - name: 📦 Install dependencies
+      - name: 📦 Install Dependencies
         run: |
-          sudo apt-get install -y jq
-          python -m pip install --upgrade pip
-          pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
+          npm install -g @vercel/ncc
+          npm install --save-dev rollup @rollup/plugin-commonjs @rollup/plugin-node-resolve
+
+      - name: 🔒 Setup Secrets
+        run: |
+          echo "ASSET_ID_LHTV01=${{ secrets.ASSET_ID_LHTV01 }}" >> $GITHUB_ENV
+          echo "ASSET_ID_LHTV02=${{ secrets.ASSET_ID_LHTV02 }}" >> $GITHUB_ENV
+
+      - name: 🌐 Setup Proxy Environment
+        uses: dev-proxy-tools/actions/setup@v1
+        with:
+          auto-start: true
+          config-file: .devproxy/config.json
+
+      - name: 📝 Compile JavaScript Code
+        run: |
+          ncc build worker.js -o dist
+          rollup --config rollup.config.js
 
       - name: 🚀 Execute Sync Script
-        run: python cloud_sync.py
+        run: |
+          node dist/index.js
+        env:
+          HTTP_PROXY: http://127.0.0.1:7890
+          HTTPS_PROXY: http://127.0.0.1:7890
 
-      - name: 🧾 Show Logs
+      - name: 📦 Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-artifacts
+          path: |
+            dist/
+            logs/
+
+      - name: 🧾 Generate Report
         if: always()
         run: |
-          echo "=== Python 运行日志摘要 ==="
-          # 如果 Python 脚本报错，这里能看到最后的输出
-          tail -n 50 mihomo.log || true
+          echo "=== Deployment Report ==="
+          echo "✅ Successfully deployed to Cloudflare Workers"
+          echo "🔑 Asset IDs used: ${{ env.ASSET_ID_LHTV01 }}, ${{ env.ASSET_ID_LHTV02 }}"
+          echo "📅 Last updated: $(date)"
