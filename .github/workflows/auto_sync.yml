@@ -9,11 +9,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      
       - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+          
       - name: Install dependencies
         run: |
-          pip install selenium selenium-wire requests chromedriver-autoinstaller
+          python -m pip install --upgrade pip
+          # 必须先安装 1.7.0 版本的 blinker，否则 selenium-wire 会报错
+          pip install blinker==1.7.0
+          pip install selenium==4.9.0 selenium-wire requests chromedriver-autoinstaller
+          
       - name: Run sync script
         run: python cloud_sync.py
