@@ -1,4 +1,4 @@
-name: IPTV_Sync
+name: IPTV_Final_Debug
 
 on:
   push:
@@ -8,38 +8,32 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: 1_Checkout
         uses: actions/checkout@v3
 
-      - name: Start_Proxy
+      - name: 2_Setup_Mihomo
         run: |
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
           
-          # 没有任何变量，没有任何缩进，直接写入最简单的配置
           cat <<EOF > config.yaml
 mixed-port: 7890
 mode: global
 proxies:
-  - name: "TW"
-    type: ss
-    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: 17001
-    cipher: aes-256-gcm
-    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+  - {name: "TW", type: ss, server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs, port: 17001, cipher: aes-256-gcm, password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d}
 EOF
           ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-          sleep 15
+          sleep 10
 
-      - name: Setup_Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.9"
+      - name: 3_Connectivity_Check
+        run: |
+          echo "--- 正在检查 GitHub 是否能连接代理服务器 ---"
+          nc -zv -w 5 brtlee3ogRTfxtWt.xf9pzeslxw.sbs 17001 || echo "❌ 警告：GitHub 无法连接到你的机场域名和端口"
+          echo "--- 正在测试代理是否能上 Google ---"
+          curl -I -x http://127.0.0.1:7890 https://www.google.com --max-time 10 || echo "❌ 错误：代理启动了但无法翻墙"
 
-      - name: Install_Libs
+      - name: 4_Setup_Python_And_Run
         run: |
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
-
-      - name: Run_Script
-        run: python cloud_sync.py
+          python cloud_sync.py
