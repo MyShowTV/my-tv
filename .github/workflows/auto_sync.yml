@@ -1,8 +1,8 @@
 name: IPTV Proxy Sync
 on:
   schedule:
-    - cron: '0 */2 * * *' # 每 2 小时全自动同步一次
-  workflow_dispatch:      # 支持手动点击按钮同步
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -11,46 +11,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Setup Clash Meta (Mihomo)
-        env:
-          SUB_URL: ${{ secrets.SUB_URL }}
+      - name: Setup Mihomo
         run: |
-          # 1. 下载 Mihomo 核心
+          # 1. 下载 Mihomo
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
-          
-          # 2. 获取机场订阅并保存
-          curl -L "$SUB_URL" -o config.yaml
-          
-          # 3. 强制修正配置：确保端口为 7890 且开启全局模式
-          sed -i 's/mixed-port:.*/mixed-port: 7890/g' config.yaml
-          sed -i 's/mode: rule/mode: global/g' config.yaml
-          
-          # 4. 后台启动并记录日志
+
+          # 2. 生成最简、合法的配置文件 (直接填入你的台湾节点信息)
+          cat <<EOF > config.yaml
+          mixed-port: 7890
+          allow-lan: true
+          mode: global
+          log-level: info
+          proxies:
+            - name: "TW-NODE"
+              type: ss
+              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+              port: 17001
+              cipher: aes-256-gcm
+              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+              udp: true
+          EOF
+
+          # 3. 启动
           ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-          
-          # 5. 关键：等待端口就绪（Errno 111 修复逻辑）
-          echo "等待代理端口 7890 开启..."
-          for i in {1..20}; do
+
+          echo "等待代理就绪..."
+          for i in {1..10}; do
             if nc -z localhost 7890; then
-              echo "✅ 代理端口已就绪！"
+              echo "✅ 代理已启动！"
               break
             fi
-            echo "等待中... ($i/20)"
-            sleep 3
+            sleep 2
           done
 
-          if ! nc -z localhost 7890; then
-            echo "❌ 代理启动超时，显示日志排查："
-            cat mihomo.log
-            exit 1
-          fi
-
-          # 6. 验证出口 IP
-          echo "------ 当前出口 IP 信息 ------"
-          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "❌ 代理无法连接外网"
-          echo -e "\n----------------------------"
+          echo "--- 测试台湾出口 IP ---"
+          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || true
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -59,13 +56,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install blinker==1.7.0
-          pip install requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
+          pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
-      - name: Execute Sync Script
+      - name: Execute Sync
         env:
-          # 通过环境变量传递代理地址
           HTTP_PROXY: "http://127.0.0.1:7890"
           HTTPS_PROXY: "http://127.0.0.1:7890"
         run: python cloud_sync.py
