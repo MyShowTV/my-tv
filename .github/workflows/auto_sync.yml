@@ -5,65 +5,43 @@ on:
     - cron: "0 */4 * * *"
   workflow_dispatch:
   push:
-    branches:
-      - main
 
 jobs:
-  deploy:
+  run_sync:
     runs-on: ubuntu-latest
-    env:
-      DEFAULT_PORT: 17001
-      MAX_RETRIES: 3
-      TIMEOUT_SEC: 15
     steps:
-      - name: 🧩 Checkout Repository
+      - name: 1. 检出代码
         uses: actions/checkout@v4
 
-      - name: ⚙️ Setup Node.js Environment
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20.x"
-
-      - name: 📦 Install Dependencies
+      - name: 2. 安装并启动代理 (Mihomo)
         run: |
-          npm install -g @vercel/ncc
-          npm install --save-dev rollup @rollup/plugin-commonjs @rollup/plugin-node-resolve
+          wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
+          gunzip mihomo-linux-amd64-v1.18.9.gz
+          chmod +x mihomo-linux-amd64-v1.18.9
 
-      - name: 🔒 Setup Secrets
+          # 这里的配置参考了你提供的图片信息
+          cat <<EOF > config.yaml
+mixed-port: 7890
+external-controller: 127.0.0.1:17650
+secret: "e85ad61f-cef6-4c1"
+mode: global
+proxies:
+  - {name: "TW", type: ss, server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs, port: 17001, cipher: aes-256-gcm, password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d}
+EOF
+          ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
+          sleep 20
+
+      - name: 3. 安装 Python 依赖
         run: |
-          echo "ASSET_ID_LHTV01=${{ secrets.ASSET_ID_LHTV01 }}" >> $GITHUB_ENV
-          echo "ASSET_ID_LHTV02=${{ secrets.ASSET_ID_LHTV02 }}" >> $GITHUB_ENV
+          pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
-      - name: 🌐 Setup Proxy Environment
-        uses: dev-proxy-tools/actions/setup@v1
-        with:
-          auto-start: true
-          config-file: .devproxy/config.json
+      - name: 4. 执行抓取脚本
+        run: python cloud_sync.py
 
-      - name: 📝 Compile JavaScript Code
-        run: |
-          ncc build worker.js -o dist
-          rollup --config rollup.config.js
-
-      - name: 🚀 Execute Sync Script
-        run: |
-          node dist/index.js
-        env:
-          HTTP_PROXY: http://127.0.0.1:7890
-          HTTPS_PROXY: http://127.0.0.1:7890
-
-      - name: 📦 Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: sync-artifacts
-          path: |
-            dist/
-            logs/
-
-      - name: 🧾 Generate Report
+      - name: 5. 打印状态日志
         if: always()
         run: |
-          echo "=== Deployment Report ==="
-          echo "✅ Successfully deployed to Cloudflare Workers"
-          echo "🔑 Asset IDs used: ${{ env.ASSET_ID_LHTV01 }}, ${{ env.ASSET_ID_LHTV02 }}"
-          echo "📅 Last updated: $(date)"
+          echo "=== 代理运行日志 ==="
+          tail -n 20 mihomo.log || true
+          echo "=== 外部控制接口测试 ==="
+          curl -H "Authorization: Bearer e85ad61f-cef6-4c1" http://127.0.0.1:17650/version || echo "API 无法连接"
