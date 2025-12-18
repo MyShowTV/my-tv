@@ -1,63 +1,69 @@
 name: IPTV Proxy Sync
+
 on:
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: "0 */4 * * *" # 每 4 小时自动执行一次
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: 🧩 Checkout
         uses: actions/checkout@v3
 
-      - name: Setup Mihomo
+      - name: ⚙️ Setup Mihomo (Auto Port Selection)
         run: |
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
-          # 尝试更换为 17003 (台湾 03) 节点，有时后面的端口更不容易被防火墙拦截
-          cat <<EOF > config.yaml
-          mixed-port: 7890
-          allow-lan: true
-          mode: global
-          log-level: info
-          proxies:
-            - name: "TW-NODE"
-              type: ss
-              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-              port: 17003
-              cipher: aes-256-gcm
-              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
-              udp: true
-          EOF
+          for p in $(seq 17001 17010 443 8443); do
+            echo "🔁 尝试端口: $p"
+            cat <<EOF > config.yaml
+mixed-port: 7890
+allow-lan: true
+mode: global
+log-level: info
+proxies:
+  - name: "FORCED-TW"
+    type: ss
+    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+    port: $p
+    cipher: aes-256-gcm
+    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+    udp: false
+EOF
 
-          ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-          
-          echo "等待节点握手..."
-          sleep 40
-          
-          echo "--- 连通性深度测试 ---"
-          # 只有这个测试通过（显示台湾IP），Python 脚本才有意义
-          PROXY_IP=$(curl -x http://127.0.0.1:7890 -s -L https://ifconfig.me || echo "FAILED")
-          echo "隧道实际 IP: $PROXY_IP"
-          
-          if [[ "$PROXY_IP" == "FAILED" ]] || [[ "$PROXY_IP" == 20.* ]] || [[ "$PROXY_IP" == 52.* ]]; then
-            echo "❌ 代理未生效（依然是机房IP或连接失败），请尝试更换 17001-17010 之间的其他端口"
-            tail -n 20 mihomo.log
-            exit 1
-          fi
+            nohup ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
+            sleep 15
+            IP=$(curl -s -x http://127.0.0.1:7890 https://ifconfig.me || echo "fail")
+            if [[ "$IP" != "fail" && "$IP" != "52."* ]]; then
+              echo "✅ 代理成功: $IP (端口 $p)"
+              break
+            else
+              echo "❌ 端口 $p 不通，重试下一个"
+              pkill -f mihomo
+              sleep 3
+            fi
+          done
 
-      - name: Set up Python
+          echo "--- 代理日志摘要 ---"
+          tail -n 10 mihomo.log
+
+      - name: 🐍 Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: "3.9"
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
-      - name: Execute Sync
-        run: python cloud_sync.py
+      - name: 🚀 Execute Sync Script
+        run: |
+          echo "--- 验证代理连通 ---"
+          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "❌ 代理连接失败"
+          echo "--- 开始执行抓取任务 ---"
+          python cloud_sync.py
