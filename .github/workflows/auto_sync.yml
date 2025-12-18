@@ -1,48 +1,24 @@
-name: IPTV Sync with Proxy
-on:
-  schedule:
-    - cron: '0 */2 * * *' # 每 2 小时运行一次
-  workflow_dispatch:
-
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Install Clash & Setup Proxy
+- name: Setup Clash Meta (Mihomo)
         env:
           SUB_URL: ${{ secrets.SUB_URL }}
         run: |
-          # 1. 下载并安装 Clash
-          wget https://github.com/Dreamacro/clash/releases/download/v1.18.0/clash-linux-amd64-v1.18.0.gz
-          gunzip clash-linux-amd64-v1.18.0.gz
-          chmod +x clash-linux-amd64-v1.18.0
+          # 1. 下载 Mihomo (原 Clash Meta，目前最稳定的分支)
+          wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
+          gunzip mihomo-linux-amd64-v1.18.9.gz
+          chmod +x mihomo-linux-amd64-v1.18.9
           
-          # 2. 获取订阅配置文件
+          # 2. 获取机场订阅
           curl -L "$SUB_URL" -o config.yaml
           
-          # 3. 强制修改 config.yaml，将模式改为全剧模式，且固定选择第一个台湾节点
-          # 使用简单的 sed 替换模式，让代理生效
+          # 3. 强制开启全局模式
           sed -i 's/mode: rule/mode: global/g' config.yaml
           
-          # 4. 后台启动 Clash (监听 7890 端口)
-          ./clash-linux-amd64-v1.18.0 -f config.yaml &
-          sleep 10 # 等待 Clash 启动和连接
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-
-      - name: Install dependencies
-        run: |
-          pip install requests seleniumwire chromedriver-autoinstaller selenium
-
-      - name: Run Sync Script
-        env:
-          # 告诉 Python 脚本使用本地 Clash 提供的代理
-          HTTP_PROXY: "http://127.0.0.1:7890"
-          HTTPS_PROXY: "http://127.0.0.1:7890"
-        run: python cloud_sync.py
+          # 4. 后台启动 (重命名为 clash 方便后续逻辑)
+          ./mihomo-linux-amd64-v1.18.9 -f config.yaml > clash.log 2>&1 &
+          
+          echo "正在启动代理隧道..."
+          sleep 20
+          
+          # 测试代理是否通畅 (访问 ifconfig.me 看看是不是台湾 IP)
+          echo "当前出口 IP 检查:"
+          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "代理尚未就绪"
