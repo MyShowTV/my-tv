@@ -1,22 +1,21 @@
-name: IPTV Proxy Sync
+name: IPTV_Sync_Task
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  build:
+  run_sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: 1_Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Mihomo
+      - name: 2_Start_Proxy
         run: |
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
-          
           cat <<EOF > config.yaml
 mixed-port: 7890
 mode: rule
@@ -29,14 +28,14 @@ EOF
           ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
           sleep 10
 
-      - name: Setup Python
+      - name: 3_Setup_Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      - name: Install Dependencies
+      - name: 4_Install_Libs
         run: |
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
-      - name: Run Script
+      - name: 5_Run_Python
         run: python cloud_sync.py
