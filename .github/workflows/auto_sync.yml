@@ -1,25 +1,48 @@
-name: IPTV-Auto-Sync
+name: IPTV Sync with Proxy
 on:
   schedule:
     - cron: '0 */2 * * *' # 每 2 小时运行一次
-  workflow_dispatch:      # 允许手动点按钮运行
+  workflow_dispatch:
 
 jobs:
-  run_sync:
+  sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Clash & Setup Proxy
+        env:
+          SUB_URL: ${{ secrets.SUB_URL }}
+        run: |
+          # 1. 下载并安装 Clash
+          wget https://github.com/Dreamacro/clash/releases/download/v1.18.0/clash-linux-amd64-v1.18.0.gz
+          gunzip clash-linux-amd64-v1.18.0.gz
+          chmod +x clash-linux-amd64-v1.18.0
           
+          # 2. 获取订阅配置文件
+          curl -L "$SUB_URL" -o config.yaml
+          
+          # 3. 强制修改 config.yaml，将模式改为全剧模式，且固定选择第一个台湾节点
+          # 使用简单的 sed 替换模式，让代理生效
+          sed -i 's/mode: rule/mode: global/g' config.yaml
+          
+          # 4. 后台启动 Clash (监听 7890 端口)
+          ./clash-linux-amd64-v1.18.0 -f config.yaml &
+          sleep 10 # 等待 Clash 启动和连接
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          # 必须先安装 1.7.0 版本的 blinker，否则 selenium-wire 会报错
-          pip install blinker==1.7.0
-          pip install selenium==4.9.0 selenium-wire requests chromedriver-autoinstaller
-          
-      - name: Run sync script
+          pip install requests seleniumwire chromedriver-autoinstaller selenium
+
+      - name: Run Sync Script
+        env:
+          # 告诉 Python 脚本使用本地 Clash 提供的代理
+          HTTP_PROXY: "http://127.0.0.1:7890"
+          HTTPS_PROXY: "http://127.0.0.1:7890"
         run: python cloud_sync.py
