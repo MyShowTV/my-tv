@@ -1,0 +1,24 @@
+name: IPTV-Auto-Sync
+on:
+  schedule:
+    - cron: '0 */2 * * *'  # 每2小时全自动跑一次
+  workflow_dispatch:       # 允许你在 GitHub 网页上点按钮手动运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+
+      - name: 设置 Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          pip install selenium selenium-wire requests chromedriver-autoinstaller
+
+      - name: 执行同步任务
+        run: python cloud_sync.py
