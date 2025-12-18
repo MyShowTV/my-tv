@@ -1,39 +1,117 @@
-name: IPTV_Final_Debug
+name: IPTV Proxy Sync Optimized
 
 on:
-  push:
+  schedule:
+    - cron: "0 */4 * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  build:
+  proxy_sync:
     runs-on: ubuntu-latest
+    env:
+      DEFAULT_PORT: 17001
+      MAX_RETRIES: 3
+      TIMEOUT_SEC: 15
     steps:
-      - name: 1_Checkout
-        uses: actions/checkout@v3
+      - name: 🧩 Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: 2_Setup_Mihomo
+      - name: ⚙️ Setup Environment
         run: |
-          wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
-          gunzip mihomo-linux-amd64-v1.18.9.gz
-          chmod +x mihomo-linux-amd64-v1.18.9
-          
-          cat <<EOF > config.yaml
+          sudo apt-get update
+          sudo apt-get install -y jq curl wget
+          wget -q https://github.com/MetaCubeX/mihomo/releases/download/v1.19.3/mihomo-linux-amd64-v1.19.3.gz
+          gunzip mihomo-linux-amd64-v1.19.3.gz
+          chmod +x mihomo-linux-amd64-v1.19.3
+
+      - name: 🌐 Parallel Port Testing
+        id: port_test
+        run: |
+          PORTS=$(seq 17001 17015)
+          VALID_PORTS=()
+          LOG_DIR="./test_logs"
+          mkdir -p $LOG_DIR
+
+          test_port() {
+            local port=$1
+            local log="$LOG_DIR/mihomo_$port.log"
+            local config="config_$port.yaml"
+
+            cat <<EOF > $config
 mixed-port: 7890
-mode: global
+allow-lan: true
+mode: rule
+log-level: warning
 proxies:
-  - {name: "TW", type: ss, server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs, port: 17001, cipher: aes-256-gcm, password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d}
+  - name: "TW-NODE-$port"
+    type: ss
+    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+    port: $port
+    cipher: aes-256-gcm
+    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+rules:
+  - DOMAIN-SUFFIX,ofiii.com,TW-NODE-$port
+  - DOMAIN,ip-api.com,TW-NODE-$port
+  - MATCH,DIRECT
 EOF
-          ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-          sleep 10
 
-      - name: 3_Connectivity_Check
-        run: |
-          echo "--- 正在检查 GitHub 是否能连接代理服务器 ---"
-          nc -zv -w 5 brtlee3ogRTfxtWt.xf9pzeslxw.sbs 17001 || echo "❌ 警告：GitHub 无法连接到你的机场域名和端口"
-          echo "--- 正在测试代理是否能上 Google ---"
-          curl -I -x http://127.0.0.1:7890 https://www.google.com --max-time 10 || echo "❌ 错误：代理启动了但无法翻墙"
+            ./mihomo-linux-amd64-v1.19.3 -f $config > $log 2>&1 &
+            sleep 10
 
-      - name: 4_Setup_Python_And_Run
+            for attempt in $(seq 1 $MAX_RETRIES); do
+              CHECK=$(curl -s --max-time $TIMEOUT_SEC -x http://127.0.0.1:7890 https://ipinfo.io/country?token=${{ secrets.IPINFO_TOKEN }} || echo 'FAIL')
+              if [[ "$CHECK" == "TW" ]]; then
+                echo "✅ 端口 $port 验证成功 (尝试 $attempt/$MAX_RETRIES)"
+                VALID_PORTS+=($port)
+                pkill -f mihomo
+                return 0
+              fi
+              sleep 5
+            done
+
+            pkill -f mihomo
+            echo "❌ 端口 $port 验证失败" >> $log
+            return 1
+          }
+
+          export -f test_port
+          echo "$PORTS" | xargs -n1 -I{} -P 8 bash -c 'test_port "$@"' _ {}
+
+          if [ ${#VALID_PORTS[@]} -gt 0 ]; then
+            SELECTED_PORT=${VALID_PORTS[0]}
+            echo "SELECTED_PORT=$SELECTED_PORT" >> $GITHUB_ENV
+          else
+            SELECTED_PORT=$DEFAULT_PORT
+            echo "SELECTED_PORT=$SELECTED_PORT" >> $GITHUB_ENV
+          fi
+
+      - name: 🚀 Final Service Startup
         run: |
-          pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
-          python cloud_sync.py
+          cat <<EOF > final_config.yaml
+mixed-port: 7890
+allow-lan: true
+mode: rule
+log-level: info
+proxies:
+  - name: "TW-FINAL"
+    type: ss
+    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+    port: ${{ env.SELECTED_PORT }}
+    cipher: aes-256-gcm
+    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+rules:
+  - DOMAIN-SUFFIX,ofiii.com,TW-FINAL
+  - DOMAIN,ipinfo.io,TW-FINAL
+  - MATCH,DIRECT
+EOF
+
+          ./mihomo-linux-amd64-v1.19.3 -f final_config.yaml
+
+      - name: 📅 Log Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: ./test_logs/
