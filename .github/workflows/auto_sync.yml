@@ -2,14 +2,14 @@ name: IPTV Proxy Sync
 
 on:
   schedule:
-    - cron: "0 */2 * * *"   # 每 2 小时执行一次
-  workflow_dispatch:
+    - cron: "0 */4 * * *"   # 每 4 小时自动运行
+  workflow_dispatch:         # 可手动触发
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 🧩 Checkout
+      - name: 🧩 Checkout Repository
         uses: actions/checkout@v3
 
       - name: ⚙️ Setup Mihomo (Auto Port Selection)
@@ -18,7 +18,7 @@ jobs:
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
-          echo "🔧 创建基础配置文件..."
+          echo "🔧 创建基础配置..."
           cat <<EOF > config.yaml
 mixed-port: 7890
 allow-lan: true
@@ -34,7 +34,7 @@ proxies:
     udp: false
 EOF
 
-          # 自动轮询端口直到代理可用
+          # 自动检测通的端口
           for p in $(seq 17001 17010); do
             echo "🔁 尝试端口: $p"
             sed -i "s/port: .*/port: $p/" config.yaml
@@ -55,7 +55,6 @@ EOF
             fi
           done
 
-          # 最终检测代理是否建立成功
           FINAL_IP=$(curl -s -x http://127.0.0.1:7890 https://ifconfig.me || echo "FAILED")
           if [[ "$FINAL_IP" == "FAILED" || "$FINAL_IP" == 52.* || "$FINAL_IP" == 20.* ]]; then
             echo "❌ 所有端口均失败，代理未生效"
@@ -67,7 +66,7 @@ EOF
           echo "--- Mihomo 代理日志摘要 ---"
           tail -n 10 mihomo.log || true
 
-      - name: 🐍 Set up Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.9"
@@ -81,14 +80,14 @@ EOF
         run: |
           echo "--- 验证代理连通性 ---"
           curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "❌ 代理连接失败"
-          echo "--- 开始执行 cloud_sync.py ---"
+          echo "--- 执行 cloud_sync.py ---"
           python cloud_sync.py
 
-      - name: 🧾 Show Logs (Always)
+      - name: 🧾 Show Logs
         if: always()
         run: |
-          echo "=== Mihomo 日志摘要 ==="
+          echo "=== Mihomo 日志 ==="
           tail -n 30 mihomo.log || true
           echo ""
-          echo "=== Python 日志 (如有输出) ==="
+          echo "=== Python 输出日志 ==="
           tail -n 50 nohup.out || true
