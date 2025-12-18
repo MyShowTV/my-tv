@@ -11,36 +11,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Setup Mihomo (Taiwan Proxy)
+      - name: Setup Mihomo
+        env:
+          SUB_URL: ${{ secrets.SUB_URL }}
         run: |
+          # 1. 下载并安装内核
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
-          # 生成纯净配置：使用台湾 05 节点 (17005) 尝试绕过拥堵
-          cat <<EOF > config.yaml
-          mixed-port: 7890
-          allow-lan: true
-          mode: global
-          log-level: info
-          proxies:
-            - name: "TW-NODE"
-              type: ss
-              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-              port: 17005
-              cipher: aes-256-gcm
-              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
-              udp: true
-          EOF
+          # 2. 下载原始订阅文件
+          curl -L "$SUB_URL" -o config.yaml
 
+          # 3. 强制修改配置：端口设为 7890，模式设为全局 (Global)
+          # 这样 Mihomo 会根据你的订阅组设置自动连接台湾节点
+          sed -i 's/mixed-port:.*/mixed-port: 7890/g' config.yaml
+          sed -i 's/mode: rule/mode: global/g' config.yaml
+
+          # 4. 后台启动
           ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
           
-          echo "正在建立隧道..."
-          sleep 20
+          echo "正在连接台湾节点，请稍候..."
+          sleep 30
           
-          echo "--- 核心验证：隧道出口 IP ---"
-          # 如果这里出来的 IP 还是美国，说明 17005 端口失效，请手动改为 17002 或 17003
-          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "代理连接失败"
+          # 5. 核心验证：检查隧道出口 IP 是否为台湾
+          echo "--- 隧道出口 IP 验证 ---"
+          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "❌ 代理启动失败，请检查 SUB_URL"
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -49,9 +45,10 @@ jobs:
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
-      - name: Execute Sync
+      - name: Execute Sync Script
         env:
           HTTP_PROXY: "http://127.0.0.1:7890"
           HTTPS_PROXY: "http://127.0.0.1:7890"
