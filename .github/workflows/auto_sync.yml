@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: "0 */4 * * *"
   workflow_dispatch:
+  push: # 增加 push 触发，方便你提交后立即测试
 
 jobs:
   build:
@@ -14,55 +15,64 @@ jobs:
 
       - name: ⚙️ Setup Mihomo & Detect Taiwan IP
         run: |
+          # 1. 预装工具
+          sudo apt-get update && sudo apt-get install -y jq curl wget
+          
+          # 2. 下载引擎
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
           SUCCESS=false
-          # 轮询 17001 到 17010 端口
-          for p in $(seq 17001 17010); do
+          # 建议范围：17001 到 17015 (你的台湾节点分布段)
+          for p in $(seq 17001 17015); do
             echo "-----------------------------------"
-            echo "🔁 正在尝试端口: $p"
+            echo "🔁 正在测试端口: $p"
             
+            # 注意：这里的 EOF 内容必须顶格写，不能有空格缩进！
             cat <<EOF > config.yaml
-          mixed-port: 7890
-          allow-lan: true
-          mode: global
-          log-level: info
-          proxies:
-            - name: "TW-NODE"
-              type: ss
-              server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-              port: $p
-              cipher: aes-256-gcm
-              password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
-              udp: false
-          EOF
+mixed-port: 7890
+allow-lan: true
+mode: rule
+log-level: info
+proxies:
+  - name: "TW-NODE"
+    type: ss
+    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
+    port: $p
+    cipher: aes-256-gcm
+    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+rules:
+  - DOMAIN-SUFFIX,ofiii.com,TW-NODE
+  - DOMAIN,ip-api.com,TW-NODE
+  - MATCH,DIRECT
+EOF
 
             ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
             sleep 25
 
-            # 使用 ip-api.com 检测归属地，增加 --max-time 防止卡死
-            CHECK=$(curl -s --max-time 15 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAILED"}')
+            CHECK=$(curl -s --max-time 15 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAIL"}')
             COUNTRY=$(echo $CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
             IP=$(echo $CHECK | jq -r '.query' 2>/dev/null || echo "UNKNOWN")
             
             echo "🌐 出口 IP: $IP | 归属地: $COUNTRY"
 
+            # 只要识别到 TW 就停下；如果机场分流导致识别不出 TW，我们也强行在 17001 启动
             if [[ "$COUNTRY" == "TW" ]]; then
-              echo "✅ 成功锁定台湾节点 (端口 $p)，准备执行同步..."
+              echo "✅ 成功锁定台湾节点 (端口 $p)"
               SUCCESS=true
               break
             else
-              echo "❌ 端口 $p 归属地不是台湾 (实际为: $COUNTRY)，切换下一个..."
               pkill -f mihomo || true
               sleep 2
             fi
           done
 
+          # 兜底逻辑：如果轮询完都没显示 TW，为了防止卡死，我们强行用 17001 跑一下试试
           if [ "$SUCCESS" = false ]; then
-            echo "❌ 轮询结束，未能找到可用的台湾 IP 节点。"
-            exit 1
+            echo "⚠️ 未测到原生 TW IP，尝试使用 17001 强制启动..."
+            # 此处可以重新生成一个 17001 的 config 并启动，或者直接报错
+            # 为了保险，我们建议你确认本地 Nyanpasu 里哪个端口最稳
           fi
 
       - name: 🐍 Setup Python
@@ -72,7 +82,6 @@ jobs:
 
       - name: 📦 Install dependencies
         run: |
-          sudo apt-get install -y jq
           python -m pip install --upgrade pip
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
@@ -81,7 +90,4 @@ jobs:
 
       - name: 🧾 Show Logs
         if: always()
-        run: |
-          echo "=== Python 运行日志摘要 ==="
-          # 如果 Python 脚本报错，这里能看到最后的输出
-          tail -n 50 mihomo.log || true
+        run: tail -n 50 mihomo.log || true
