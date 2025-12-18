@@ -1,24 +1,54 @@
-- name: Setup Clash Meta (Mihomo)
+name: IPTV Proxy Sync
+on:
+  schedule:
+    - cron: '0 */2 * * *' # 每 2 小时全自动同步一次
+  workflow_dispatch:      # 支持手动点击按钮同步
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Clash Meta (Mihomo)
         env:
           SUB_URL: ${{ secrets.SUB_URL }}
         run: |
-          # 1. 下载 Mihomo (原 Clash Meta，目前最稳定的分支)
+          # 1. 下载 Mihomo 核心 (原 Clash Meta，目前最稳定的分支)
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
           
-          # 2. 获取机场订阅
+          # 2. 获取机场订阅并保存
           curl -L "$SUB_URL" -o config.yaml
           
-          # 3. 强制开启全局模式
+          # 3. 强制开启全局模式 (让 GitHub 流量全部通过代理)
           sed -i 's/mode: rule/mode: global/g' config.yaml
           
-          # 4. 后台启动 (重命名为 clash 方便后续逻辑)
+          # 4. 后台启动 Mihomo
           ./mihomo-linux-amd64-v1.18.9 -f config.yaml > clash.log 2>&1 &
           
-          echo "正在启动代理隧道..."
-          sleep 20
+          echo "正在启动代理隧道并建立台湾节点连接..."
+          sleep 25
           
-          # 测试代理是否通畅 (访问 ifconfig.me 看看是不是台湾 IP)
-          echo "当前出口 IP 检查:"
-          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "代理尚未就绪"
+          # 5. 关键测试：验证代理是否通畅及出口 IP 归属
+          echo "------ 出口 IP 信息 ------"
+          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "❌ 代理启动失败"
+          echo -e "\n------------------------"
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests seleniumwire chromedriver-autoinstaller selenium
+
+      - name: Execute Sync Script
+        env:
+          # 设置环境变量，确保 Python 脚本识别代理
+          HTTP_PROXY: "http://127.0.0.1:7890"
+          HTTPS_PROXY: "http://127.0.0.1:7890"
+        run: python cloud_sync.py
