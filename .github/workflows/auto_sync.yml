@@ -1,7 +1,7 @@
 name: IPTV Proxy Sync
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 */4 * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,23 +11,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Setup Mihomo (Hardwired Taiwan Node)
+      - name: Setup Mihomo
         run: |
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
-          # 手动构建 Shadowsocks 配置文件 (台湾 01 节点)
+          # 尝试更换为 17003 (台湾 03) 节点，有时后面的端口更不容易被防火墙拦截
           cat <<EOF > config.yaml
           mixed-port: 7890
           allow-lan: true
           mode: global
           log-level: info
           proxies:
-            - name: "FORCED-TW-01"
+            - name: "TW-NODE"
               type: ss
               server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-              port: 17001
+              port: 17003
               cipher: aes-256-gcm
               password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
               udp: true
@@ -35,14 +35,19 @@ jobs:
 
           ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
           
-          echo "等待隧道建立 (40秒)..."
+          echo "等待节点握手..."
           sleep 40
           
-          echo "--- 隧道出口 IP 验证 ---"
-          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "❌ 代理无法连接节点"
+          echo "--- 连通性深度测试 ---"
+          # 只有这个测试通过（显示台湾IP），Python 脚本才有意义
+          PROXY_IP=$(curl -x http://127.0.0.1:7890 -s -L https://ifconfig.me || echo "FAILED")
+          echo "隧道实际 IP: $PROXY_IP"
           
-          echo "--- 代理日志摘要 ---"
-          tail -n 10 mihomo.log
+          if [[ "$PROXY_IP" == "FAILED" ]] || [[ "$PROXY_IP" == 20.* ]] || [[ "$PROXY_IP" == 52.* ]]; then
+            echo "❌ 代理未生效（依然是机房IP或连接失败），请尝试更换 17001-17010 之间的其他端口"
+            tail -n 20 mihomo.log
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -54,6 +59,5 @@ jobs:
           python -m pip install --upgrade pip
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
-      - name: Execute Sync Script
-        # 注意：此处不设置 HTTP_PROXY 环境变量，防止干扰 Selenium 内部通信
+      - name: Execute Sync
         run: python cloud_sync.py
