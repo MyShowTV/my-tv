@@ -10,82 +10,52 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 🧩 检出仓库
+      - name: 🧩 Checkout
         uses: actions/checkout@v3
 
-      - name: ⚙️ 环境初始化
+      - name: ⚙️ Setup Mihomo
         run: |
           sudo apt-get update && sudo apt-get install -y jq curl wget
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
-      - name: ⚙️ 台湾节点精准锁定
+      - name: ⚙️ Start Proxy
         run: |
-          SUCCESS=false
-          # 我们尝试配置文件中的 01, 03, 05 三个端口
-          for p in 17001 17003 17005; do
-            echo "-----------------------------------"
-            echo "🔁 正在测试台湾端口: $p"
-            
-            cat <<EOF > config.yaml
+          # 强制使用你配置里的 17001 台湾节点
+          cat <<EOF > config.yaml
 mixed-port: 7890
 allow-lan: true
 mode: rule
 log-level: info
-dns:
-  enable: true
-  nameserver: [223.5.5.5, 8.8.8.8]
 proxies:
-  - name: "TW-NODE"
+  - name: "TW"
     type: ss
     server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: $p
+    port: 17001
     cipher: aes-256-gcm
     password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
 rules:
-  - DOMAIN-SUFFIX,ofiii.com,TW-NODE
-  - DOMAIN,ip-api.com,TW-NODE
+  - DOMAIN-SUFFIX,ofiii.com,TW
   - MATCH,DIRECT
 EOF
+          ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
+          sleep 20
+          echo "代理已启动，正在检查连通性..."
+          curl -i -x http://127.0.0.1:7890 http://www.ofiii.com || true
 
-            ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-            sleep 30
-
-            # 验证归属地
-            CHECK=$(curl -s --max-time 15 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAIL"}')
-            COUNTRY=$(echo \$CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
-            
-            echo "🌐 端口 \$p 出口地: \$COUNTRY"
-
-            if [[ "\$COUNTRY" == "TW" ]]; then
-              echo "✅ 成功锁定台湾原生IP！"
-              SUCCESS=true
-              break
-            else
-              echo "❌ 依然显示为 \$COUNTRY，正在清理进程..."
-              pkill -f mihomo || true
-              sleep 2
-            fi
-          done
-
-          if [ "\$SUCCESS" = false ]; then
-            echo "⚠️ 警告：GitHub 节点被识别为非台湾。强行继续执行抓取脚本..."
-            # 如果依然失败，我们不退出，尝试让 Python 脚本自己处理
-          fi
-
-      - name: 🐍 配置 Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.9"
 
-      - name: 📦 安装抓取依赖
+      - name: 📦 Install Libs
         run: |
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
-      - name: 🚀 执行同步脚本
+      - name: 🚀 Run Sync
         run: python cloud_sync.py
 
-      - name: 🧾 日志摘要
+      - name: 🧾 Show Log
         if: always()
         run: tail -n 50 mihomo.log || true
