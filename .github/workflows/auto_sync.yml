@@ -9,103 +9,83 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      DEFAULT_PORT: 17001
     steps:
       - name: 🧩 Checkout Repository
         uses: actions/checkout@v3
 
       - name: ⚙️ Setup Mihomo & Detect Taiwan IP
         run: |
-          sudo apt-get update && sudo apt-get install -y jq curl wget
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
-          # 并行测试端口范围
-          PORTS=$(seq 17001 17015 | xargs -I{} sh -c 'echo "{}"')
           SUCCESS=false
-          VALID_PORTS=()
-
-          # 并行测试函数
-          test_port() {
-            local port=$1
-            local log_file="mihomo_$port.log"
-            local config="config_$port.yaml"
-
-            cat <<EOF > $config
-mixed-port: 7890
-allow-lan: true
-mode: rule
-log-level: warning
-proxies:
-  - name: "TW-NODE-$port"
-    type: ss
-    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: $port
-    cipher: aes-256-gcm
-    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
-rules:
-  - DOMAIN-SUFFIX,ofiii.com,TW-NODE-$port
-  - DOMAIN,ip-api.com,TW-NODE-$port
-  - MATCH,DIRECT
-EOF
-
-            ./mihomo-linux-amd64-v1.18.9 -f $config > $log_file 2>&1 &
-            sleep 10  # 缩短初始化等待时间
+          # 轮询 17001 到 17015 端口（略微扩大范围增加成功率）
+          for p in $(seq 17001 17015); do
+            echo "-----------------------------------"
+            echo "🔁 正在尝试端口: $p"
             
-            # 智能重试机制
-            for i in {1..3}; do
-              CHECK=$(curl -s --max-time 10 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAIL"}')
-              COUNTRY=$(echo $CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
-              IP=$(echo $CHECK | jq -r '.query' 2>/dev/null || echo "UNKNOWN")
-              
-              if [[ "$COUNTRY" == "TW" ]]; then
-                echo "✅ 端口 $port 验证成功 | IP: $IP"
-                VALID_PORTS+=($port)
-                pkill -f mihomo
-                return 0
-              fi
-              sleep 5
-            done
-            
-            pkill -f mihomo || true
-            echo "❌ 端口 $port 验证失败"
-            return 1
-          }
-
-          # 导出函数以便子进程使用
-          export -f test_port
-
-          # 并行执行测试
-          echo "$PORTS" | xargs -n1 -I{} -P 15 bash -c 'test_port "$@"' _ {}
-
-          # 回退逻辑
-          if [ ${#VALID_PORTS[@]} -gt 0 ]; then
-            SELECTED_PORT=${VALID_PORTS[0]}
-            echo "🚀 使用有效端口: $SELECTED_PORT"
-          else
-            SELECTED_PORT=$DEFAULT_PORT
-            echo "🔥 回退到默认端口: $SELECTED_PORT"
-          fi
-
-          # 最终启动服务
-          cat <<EOF > final_config.yaml
+            # 注意：下面的配置内容必须严格左顶格，不能有任何空格缩进
+            cat <<EOF > config.yaml
 mixed-port: 7890
 allow-lan: true
 mode: rule
 log-level: info
 proxies:
-  - name: "TW-FINAL"
+  - name: "TW-NODE"
     type: ss
     server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: $SELECTED_PORT
+    port: $p
     cipher: aes-256-gcm
     password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+    udp: false
 rules:
-  - DOMAIN-SUFFIX,ofiii.com,TW-FINAL
-  - DOMAIN,ip-api.com,TW-FINAL
+  - DOMAIN-SUFFIX,ofiii.com,TW-NODE
+  - DOMAIN,ip-api.com,TW-NODE
   - MATCH,DIRECT
 EOF
 
-          ./mihomo-linux-amd64-v1.18.9 -f final_config.yaml
+            ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
+            sleep 25
+
+            CHECK=$(curl -s --max-time 15 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAILED"}')
+            COUNTRY=$(echo $CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
+            IP=$(echo $CHECK | jq -r '.query' 2>/dev/null || echo "UNKNOWN")
+            
+            echo "🌐 出口 IP: $IP | 归属地: $COUNTRY"
+
+            if [[ "$COUNTRY" == "TW" ]]; then
+              echo "✅ 成功锁定台湾节点 (端口 $p)，准备执行同步..."
+              SUCCESS=true
+              break
+            else
+              echo "❌ 端口 $p 归属地不是台湾 (实际为: $COUNTRY)，切换下一个..."
+              pkill -f mihomo || true
+              sleep 2
+            fi
+          done
+
+          if [ "$SUCCESS" = false ]; then
+            echo "❌ 轮询结束，未能找到可用的台湾 IP 节点。"
+            exit 1
+          fi
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: 📦 Install dependencies
+        run: |
+          sudo apt-get install -y jq
+          python -m pip install --upgrade pip
+          pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
+
+      - name: 🚀 Execute Sync Script
+        run: python cloud_sync.py
+
+      - name: 🧾 Show Logs
+        if: always()
+        run: |
+          echo "=== Mihomo 运行日志摘要 ==="
+          tail -n 50 mihomo.log || true
