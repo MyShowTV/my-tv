@@ -3,59 +3,40 @@ name: IPTV Proxy Sync
 on:
   push:
   workflow_dispatch:
-  schedule:
-    - cron: "0 */4 * * *"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 🧩 Checkout
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: ⚙️ Setup Mihomo
+      - name: Setup Mihomo
         run: |
-          sudo apt-get update && sudo apt-get install -y jq curl wget
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
-
-      - name: ⚙️ Start Proxy
-        run: |
-          # 强制使用你配置里的 17001 台湾节点
+          
           cat <<EOF > config.yaml
 mixed-port: 7890
-allow-lan: true
 mode: rule
-log-level: info
 proxies:
-  - name: "TW"
-    type: ss
-    server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: 17001
-    cipher: aes-256-gcm
-    password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
+  - {name: "TW", type: ss, server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs, port: 17001, cipher: aes-256-gcm, password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d}
 rules:
   - DOMAIN-SUFFIX,ofiii.com,TW
   - MATCH,DIRECT
 EOF
           ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-          sleep 20
-          echo "代理已启动，正在检查连通性..."
-          curl -i -x http://127.0.0.1:7890 http://www.ofiii.com || true
+          sleep 10
 
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: '3.9'
 
-      - name: 📦 Install Libs
+      - name: Install Dependencies
         run: |
           pip install blinker==1.7.0 requests selenium-wire==5.1.0 chromedriver-autoinstaller selenium==4.9.1
 
-      - name: 🚀 Run Sync
+      - name: Run Script
         run: python cloud_sync.py
-
-      - name: 🧾 Show Log
-        if: always()
-        run: tail -n 50 mihomo.log || true
