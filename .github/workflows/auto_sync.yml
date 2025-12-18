@@ -15,27 +15,27 @@ jobs:
         env:
           SUB_URL: ${{ secrets.SUB_URL }}
         run: |
-          # 1. 下载 Mihomo 核心 (原 Clash Meta，目前最稳定的分支)
+          # 1. 下载 Mihomo 核心
           wget -q https://github.com/MetaCubeX/Mihomo/releases/download/v1.18.9/mihomo-linux-amd64-v1.18.9.gz
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
           
-          # 2. 获取机场订阅并保存
+          # 2. 获取机场订阅
           curl -L "$SUB_URL" -o config.yaml
           
-          # 3. 强制开启全局模式 (让 GitHub 流量全部通过代理)
+          # 3. 强制开启全局模式
           sed -i 's/mode: rule/mode: global/g' config.yaml
           
-          # 4. 后台启动 Mihomo
+          # 4. 后台启动
           ./mihomo-linux-amd64-v1.18.9 -f config.yaml > clash.log 2>&1 &
           
-          echo "正在启动代理隧道并建立台湾节点连接..."
+          echo "正在启动代理隧道..."
           sleep 25
           
-          # 5. 关键测试：验证代理是否通畅及出口 IP 归属
-          echo "------ 出口 IP 信息 ------"
-          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "❌ 代理启动失败"
-          echo -e "\n------------------------"
+          # 5. 验证出口 IP
+          echo "------ 当前出口 IP 信息 ------"
+          curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "❌ 代理未就绪"
+          echo -e "\n----------------------------"
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -44,11 +44,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests seleniumwire chromedriver-autoinstaller selenium
+          # 注意：安装包名是 selenium-wire，带横杠
+          pip install requests selenium-wire chromedriver-autoinstaller selenium
 
       - name: Execute Sync Script
         env:
-          # 设置环境变量，确保 Python 脚本识别代理
+          # 让 Python 所有的请求都强制走本地代理
           HTTP_PROXY: "http://127.0.0.1:7890"
           HTTPS_PROXY: "http://127.0.0.1:7890"
         run: python cloud_sync.py
