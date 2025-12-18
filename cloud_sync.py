@@ -5,83 +5,81 @@ from seleniumwire import webdriver
 import chromedriver_autoinstaller
 from selenium.webdriver.chrome.options import Options
 
-# ====== 配置区 ======
 WORKER_URL = "https://cdtv-proxy.leixinghuazj.workers.dev/update_key"
 AUTH_PW = "your_password_666" 
 
-CHANNELS = [
-    "litv-longturn03", "litv-longturn21", "litv-longturn18", 
-    "litv-longturn11", "litv-longturn12", "litv-longturn01", "litv-longturn02"
-]
+CHANNELS = ["litv-longturn03", "litv-longturn21", "litv-longturn18", "litv-longturn11", "litv-longturn12", "litv-longturn01", "litv-longturn02"]
 
 def get_driver():
-    # 修复 Errno 111：下载驱动时先临时关闭环境变量代理（GitHub 环境直连极快）
-    old_http = os.environ.pop('HTTP_PROXY', None)
-    old_https = os.environ.pop('HTTPS_PROXY', None)
+    # 彻底隔离驱动下载，防止干扰
+    old_proxy = os.environ.get('HTTP_PROXY')
+    if 'HTTP_PROXY' in os.environ: del os.environ['HTTP_PROXY']
+    if 'HTTPS_PROXY' in os.environ: del os.environ['HTTPS_PROXY']
     
-    print("📥 正在安装浏览器驱动...")
     chromedriver_autoinstaller.install()
     
-    # 还原代理环境变量，确保后续 Selenium 请求走代理
-    if old_http: os.environ['HTTP_PROXY'] = old_http
-    if old_https: os.environ['HTTPS_PROXY'] = old_https
-    
-    proxy = "http://127.0.0.1:7890"
+    # 重新设置代理
+    os.environ['HTTP_PROXY'] = "http://127.0.0.1:7890"
+    os.environ['HTTPS_PROXY'] = "http://127.0.0.1:7890"
+
     sw_options = {
         'proxy': {
-            'http': proxy,
-            'https': proxy,
+            'http': 'http://127.0.0.1:7890',
+            'https': 'http://127.0.0.1:7890',
             'no_proxy': 'localhost,127.0.0.1'
         },
-        'connection_timeout': 30
+        'auto_config': False, # 强制手动配置代理
+        'request_storage': 'memory'
     }
     
     options = Options()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
-    options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
     return webdriver.Chrome(options=options, seleniumwire_options=sw_options)
 
 def sync():
-    print("🚀 启动抓取流程...")
     driver = get_driver()
+    # 强制测试驱动内部的 IP
+    try:
+        driver.get("https://ifconfig.me/ip")
+        print(f"🕵️ 浏览器实际出口 IP: {driver.page_source.strip()}")
+    except: pass
 
     for cid in CHANNELS:
         try:
-            print(f"📡 目标频道: {cid}")
+            print(f"📡 抓取频道: {cid}")
             driver.get(f"https://www.ofiii.com/channel/watch/{cid}")
             
-            # 给网页足够的加载时间
-            time.sleep(25) 
-            
-            # 点击页面中心
-            driver.execute_script("document.elementFromPoint(960, 540).click();")
+            # 增加等待时间，Ofiii 节点较慢
+            time.sleep(30) 
             
             asset_id = None
+            # 扩大搜索范围：只要包含 playlist 且在 ofiii 的请求中
             for req in driver.requests:
-                if cid in req.url and '.m3u8' in req.url:
-                    parts = req.url.split('/')
-                    if 'playlist' in parts:
+                url = req.url
+                if 'playlist' in url and (cid in url or 'litv' in url):
+                    # 尝试多种分割方式获取 ID
+                    try:
+                        parts = url.split('/')
                         asset_id = parts[parts.index('playlist') + 1]
                         break
+                    except: continue
             
             if asset_id:
                 res = requests.post(WORKER_URL, json={"id": cid, "key": asset_id, "pw": AUTH_PW}, timeout=10)
-                print(f"✅ 同步成功 | 钥匙: {asset_id} | Worker响应: {res.status_code}")
+                print(f"✅ {cid} 同步成功: {asset_id}")
             else:
-                print(f"❌ 失败: 未捕获到流地址，请检查台湾节点是否在线")
+                print(f"❌ {cid} 失败 (未捕获到 playlist 请求)")
             
             del driver.requests
-            
         except Exception as e:
-            print(f"💥 运行异常: {e}")
-
+            print(f"💥 {cid} 异常: {e}")
+    
     driver.quit()
-    print("🏁 任务完成")
 
 if __name__ == "__main__":
     sync()
