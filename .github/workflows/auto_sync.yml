@@ -2,7 +2,7 @@ name: IPTV Proxy Sync
 
 on:
   schedule:
-    - cron: "0 */4 * * *" # 每 4 小时自动执行一次
+    - cron: "0 */2 * * *"   # 每 2 小时执行一次
   workflow_dispatch:
 
 jobs:
@@ -18,38 +18,54 @@ jobs:
           gunzip mihomo-linux-amd64-v1.18.9.gz
           chmod +x mihomo-linux-amd64-v1.18.9
 
-          for p in $(seq 17001 17010 443 8443); do
-            echo "🔁 尝试端口: $p"
-            cat <<EOF > config.yaml
+          echo "🔧 创建基础配置文件..."
+          cat <<EOF > config.yaml
 mixed-port: 7890
 allow-lan: true
 mode: global
 log-level: info
 proxies:
-  - name: "FORCED-TW"
+  - name: "TW-AUTO"
     type: ss
     server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: $p
+    port: 17001
     cipher: aes-256-gcm
     password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
     udp: false
 EOF
 
+          # 自动轮询端口直到代理可用
+          for p in $(seq 17001 17010); do
+            echo "🔁 尝试端口: $p"
+            sed -i "s/port: .*/port: $p/" config.yaml
+
             nohup ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
-            sleep 15
-            IP=$(curl -s -x http://127.0.0.1:7890 https://ifconfig.me || echo "fail")
-            if [[ "$IP" != "fail" && "$IP" != "52."* ]]; then
-              echo "✅ 代理成功: $IP (端口 $p)"
+            sleep 20
+
+            IP=$(curl -s -x http://127.0.0.1:7890 https://ifconfig.me || echo "FAILED")
+            echo "🌐 隧道出口 IP: $IP"
+
+            if [[ "$IP" != "FAILED" && "$IP" != "52."* && "$IP" != "20."* ]]; then
+              echo "✅ 代理连接成功: $IP (端口 $p)"
               break
             else
-              echo "❌ 端口 $p 不通，重试下一个"
-              pkill -f mihomo
+              echo "❌ 端口 $p 不通，切换下一个..."
+              pkill -f mihomo || true
               sleep 3
             fi
           done
 
-          echo "--- 代理日志摘要 ---"
-          tail -n 10 mihomo.log
+          # 最终检测代理是否建立成功
+          FINAL_IP=$(curl -s -x http://127.0.0.1:7890 https://ifconfig.me || echo "FAILED")
+          if [[ "$FINAL_IP" == "FAILED" || "$FINAL_IP" == 52.* || "$FINAL_IP" == 20.* ]]; then
+            echo "❌ 所有端口均失败，代理未生效"
+            tail -n 20 mihomo.log || true
+            exit 1
+          fi
+
+          echo "✅ 最终代理出口 IP: $FINAL_IP"
+          echo "--- Mihomo 代理日志摘要 ---"
+          tail -n 10 mihomo.log || true
 
       - name: 🐍 Set up Python
         uses: actions/setup-python@v4
@@ -63,7 +79,16 @@ EOF
 
       - name: 🚀 Execute Sync Script
         run: |
-          echo "--- 验证代理连通 ---"
+          echo "--- 验证代理连通性 ---"
           curl -x http://127.0.0.1:7890 -L https://ifconfig.me || echo "❌ 代理连接失败"
-          echo "--- 开始执行抓取任务 ---"
+          echo "--- 开始执行 cloud_sync.py ---"
           python cloud_sync.py
+
+      - name: 🧾 Show Logs (Always)
+        if: always()
+        run: |
+          echo "=== Mihomo 日志摘要 ==="
+          tail -n 30 mihomo.log || true
+          echo ""
+          echo "=== Python 日志 (如有输出) ==="
+          tail -n 50 nohup.out || true
