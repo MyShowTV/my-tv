@@ -20,53 +20,52 @@ jobs:
           chmod +x mihomo-linux-amd64-v1.18.9
 
           SUCCESS=false
-          # 轮询 17001 到 17015 端口（略微扩大范围增加成功率）
-          for p in $(seq 17001 17015); do
+          # 轮询 17001 到 17010 端口
+          for p in $(seq 17001 17010); do
             echo "-----------------------------------"
             echo "🔁 正在尝试端口: $p"
             
-            # 注意：下面的配置内容必须严格左顶格，不能有任何空格缩进
-            cat <<EOF > config.yaml
+            # 使用 'EOF' 确保内部的 $ 符号不被 GitHub 解析
+            cat <<'EOF' > config.yaml
 mixed-port: 7890
 allow-lan: true
-mode: rule
+mode: global
 log-level: info
 proxies:
   - name: "TW-NODE"
     type: ss
     server: brtlee3ogRTfxtWt.xf9pzeslxw.sbs
-    port: $p
+    port: PORT_PLACEHOLDER
     cipher: aes-256-gcm
     password: 1d23e3c5-c047-46a0-b7d8-d838aff7ae8d
     udp: false
-rules:
-  - DOMAIN-SUFFIX,ofiii.com,TW-NODE
-  - DOMAIN,ip-api.com,TW-NODE
-  - MATCH,DIRECT
 EOF
+            # 用 sed 安全地替换端口号，避开 EOF 内部的变量解析问题
+            sed -i "s/PORT_PLACEHOLDER/$p/" config.yaml
 
             ./mihomo-linux-amd64-v1.18.9 -f config.yaml > mihomo.log 2>&1 &
             sleep 25
 
+            # 检测归属地
             CHECK=$(curl -s --max-time 15 -x http://127.0.0.1:7890 http://ip-api.com/json/ || echo '{"countryCode":"FAILED"}')
-            COUNTRY=$(echo $CHECK | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
-            IP=$(echo $CHECK | jq -r '.query' 2>/dev/null || echo "UNKNOWN")
+            COUNTRY=$(echo "$CHECK" | jq -r '.countryCode' 2>/dev/null || echo "ERROR")
+            IP=$(echo "$CHECK" | jq -r '.query' 2>/dev/null || echo "UNKNOWN")
             
             echo "🌐 出口 IP: $IP | 归属地: $COUNTRY"
 
-            if [[ "$COUNTRY" == "TW" ]]; then
-              echo "✅ 成功锁定台湾节点 (端口 $p)，准备执行同步..."
+            if [ "$COUNTRY" = "TW" ]; then
+              echo "✅ 成功锁定台湾节点 (端口 $p)"
               SUCCESS=true
               break
             else
-              echo "❌ 端口 $p 归属地不是台湾 (实际为: $COUNTRY)，切换下一个..."
+              echo "❌ 端口 $p 归属地不是台湾，尝试下一个..."
               pkill -f mihomo || true
               sleep 2
             fi
           done
 
           if [ "$SUCCESS" = false ]; then
-            echo "❌ 轮询结束，未能找到可用的台湾 IP 节点。"
+            echo "❌ 无法找到台湾节点"
             exit 1
           fi
 
@@ -87,5 +86,5 @@ EOF
       - name: 🧾 Show Logs
         if: always()
         run: |
-          echo "=== Mihomo 运行日志摘要 ==="
+          echo "=== 日志摘要 ==="
           tail -n 50 mihomo.log || true
